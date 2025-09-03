@@ -1,0 +1,78 @@
+# --- Python / FastAPI ---
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+*.egg
+*.manifest
+*.spec
+
+# venv
+.venv/
+env/
+venv/
+ENV/
+
+# pip / poetry
+pip-log.txt
+pip-delete-this-directory.txt
+.poetry/
+.poetry-cache/
+.poetry-build/
+
+# PyInstaller
+build/
+dist/
+*.manifest
+*.spec
+
+# Unit test / coverage
+.coverage
+.coverage.*
+.cache
+pytest_cache/
+htmlcov/
+
+# IDE / Editors
+.vscode/
+.idea/
+*.iml
+
+# Logs
+*.log
+logs/
+log/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- Node / Frontend (если будешь подключать npm) ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.tsbuildinfo
+
+# --- Docker ---
+*.pid
+*.seed
+*.pid.lock
+docker-compose.override.yml
+
+# --- Misc ---
+# Local .env with secrets
+.env
+.env.*
+!.env.example
+
+# Backup / tmp
+*.bak
+*.tmp
+*.swp
+*.swo
+~$*

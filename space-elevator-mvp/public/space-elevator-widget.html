@@ -1,0 +1,434 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Космолифт • Виджет управления (MVP)</title>
+  <style>
+    :root{
+      --bg:#0b1020;--panel:#121932;--muted:#20284a;--text:#e8ecff;--accent:#7aa2ff;--ok:#22c55e;--warn:#f59e0b;--bad:#ef4444;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:linear-gradient(180deg,#060a19,#0b1020);color:var(--text);font:14px/1.4 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,"Helvetica Neue",Arial}
+    .wrap{max-width:1120px;margin-inline:auto;padding:24px}
+    .card{background:var(--panel);border:1px solid #223;box-shadow:0 10px 30px rgba(0,0,0,.25);border-radius:16px}
+    .row{display:grid;gap:16px}
+    @media(min-width:960px){.row{grid-template-columns:1.2fr .8fr}}
+    .header{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:16px}
+    .badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;background:var(--muted);border:1px solid #2b3568;font-weight:600}
+    .badge.ok{background:rgba(16,185,129,.12);border-color:#1f6f4f}
+    .badge.warn{background:rgba(245,158,11,.12);border-color:#7a5a1a}
+    .badge.bad{background:rgba(239,68,68,.12);border-color:#7a1a1a}
+    .title{font-weight:800;letter-spacing:.3px}
+    .muted{opacity:.8}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    @media(min-width:960px){.grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+    .kv{background:var(--muted);border:1px solid #2b3568;border-radius:12px;padding:12px}
+    .kv .k{opacity:.75;font-size:12px;margin-bottom:6px}
+    .kv .v{font-weight:700;font-size:18px}
+    .section{padding:16px}
+    .controls{display:grid;gap:12px}
+    .controls .row2{display:grid;gap:12px;grid-template-columns:repeat(2,minmax(0,1fr))}
+    button,.btn{background:#1a2244;border:1px solid #2b3568;color:var(--text);padding:10px 12px;border-radius:12px;cursor:pointer;font-weight:700}
+    button:hover{background:#1f2751}
+    .btn.primary{background:linear-gradient(180deg,#345,#233);border-color:#3b82f6}
+    .btn.danger{background:linear-gradient(180deg,#452,#231);border-color:#ef4444}
+    .btn.ghost{background:transparent}
+    label{display:block;margin:6px 0 4px;font-weight:600}
+    input,select{width:100%;background:#0f1430;border:1px solid #2b3568;color:var(--text);padding:10px;border-radius:10px}
+    input[type="range"]{height:28px}
+    .log{max-height:180px;overflow:auto;background:#0f1430;border-radius:10px;border:1px solid #2b3568;padding:8px}
+    .log-item{opacity:.9;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace}
+    .tabs{display:flex;gap:8px;padding:8px;border-bottom:1px solid #223}
+    .tab{padding:10px 12px;border-radius:12px;background:#0f1430;border:1px solid #2b3568;cursor:pointer}
+    .tab.active{background:#1a2244}
+    table{width:100%;border-collapse:collapse}
+    th,td{padding:8px;border-bottom:1px solid #2b3568;text-align:left}
+    .right{display:flex;justify-content:flex-end}
+    .hint{font-size:12px;opacity:.8}
+    .footer{margin-top:16px;display:flex;gap:8px;align-items:center;justify-content:space-between}
+    a{color:var(--accent)}
+  </style>
+</head>
+<body>
+  <!--
+    Как встраивать:
+    1) Скопируйте этот файл как есть на страницу (или вставьте содержимое <div> + <script> блоки).
+    2) При желании задайте URL API и WebSocket прямо на контейнере через data-атрибуты:
+       <div id="space-elevator-widget" data-api-base="http://localhost:8000" data-ws-url="ws://localhost:8000/ws/telemetry"></div>
+    3) Если бэкенд недоступен, виджет автоматически запустит симуляцию (Simulation Mode).
+  -->
+  <div class="wrap">
+    <div id="space-elevator-widget"
+     data-api-base="http://localhost:8000"
+     data-ws-url="ws://localhost:8000/ws/telemetry"></div>
+  </div>
+
+  <!-- React + ReactDOM (UMD), для быстрой вставки без сборки -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <script type="text/babel"
+        data-presets="env,react"
+        data-plugins="proposal-optional-chaining,proposal-nullish-coalescing-operator">
+    const { useEffect, useMemo, useRef, useState } = React;
+
+    // ======== Утилиты ========
+    const fmt = {
+      km:v=>`${v.toFixed(2)} км`,
+      ms:v=>`${v.toFixed(1)} м/с`,
+      kg:v=>`${v.toFixed(0)} кг`,
+    }
+    const now = () => new Date().toLocaleTimeString();
+
+    // ======== Типы команд ========
+    const ACTIONS = {
+      START:"start",
+      STOP:"stop",
+      EMERGENCY_STOP:"emergency_stop",
+      SET_DOORS:"set_doors", // payload:{state:"OPEN"|"CLOSED"}
+      SET_TARGET:"set_target", // payload:{km:number}
+      SET_SPEED:"set_speed", // payload:{ms:number}
+      LOAD_FROM_WAREHOUSE:"load_from_warehouse", // (опционально для API)
+    };
+
+    // ======== Начальное состояние ========
+    const initialState = {
+      connected:false,
+      sim:true,
+      status:{
+        position_km:0,
+        speed_ms:0,
+        payload_kg:0,
+        doors:"CLOSED",
+        running:false,
+        target_km:0,
+        cabin:"IDLE", // IDLE | MOVING | ERROR
+      },
+      setpoint_ms:20,
+      parcels:[], // {id, weight_kg, destination_km, status: QUEUED|LOADED|SHIPPED|DELIVERED}
+      tab:"control",
+      log:[{t:now(),msg:"Виджет инициализирован"}],
+    };
+
+    function appendLog(setState, msg){
+      setState(s=>({
+        ...s,
+        log:[{t:now(),msg}, ...s.log].slice(0,200)
+      }));
+    }
+
+    // ======== Симулятор (если нет бэкенда) ========
+    function useSimulator(enabled, state, setState){
+      const tickRef = useRef(null);
+      useEffect(()=>{
+        if(!enabled) return;
+        const TICK = 200; // ms
+        function step(){
+          setState(s=>{
+            const st = {...s.status};
+            const sp = s.setpoint_ms;
+            const moving = st.running && st.doors !== "OPEN" && Math.abs(st.target_km - st.position_km) > 0.01;
+            if(moving){
+              st.cabin = "MOVING";
+              const dir = st.target_km > st.position_km ? 1 : -1;
+              const delta_km = (sp/1000) * (TICK/1000); // м/с -> км/тик
+              st.position_km += dir * delta_km;
+              st.speed_ms = sp * dir;
+              // Прибытие
+              if(Math.sign(st.target_km - st.position_km) !== dir || Math.abs(st.target_km - st.position_km) < 0.005){
+                st.position_km = st.target_km;
+                st.running = false;
+                st.speed_ms = 0;
+                st.cabin = "IDLE";
+              }
+            } else {
+              st.speed_ms = 0;
+              if(!st.running) st.cabin = "IDLE";
+            }
+            return {...s, status:st};
+          });
+          tickRef.current = setTimeout(step, TICK);
+        }
+        tickRef.current = setTimeout(step, TICK);
+        return ()=>{ clearTimeout(tickRef.current); }
+      },[enabled]);
+    }
+
+    // ======== API ========
+    async function postJSON(url, body){
+      const res = await fetch(url, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body)});
+      if(!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    // ======== Главный компонент ========
+    function App({ mountEl }){
+      const [state, setState] = useState(initialState);
+      const [config, setConfig] = useState(()=>{
+        const apiBase = mountEl?.dataset?.apiBase || window.SpaceElevatorConfig?.apiBase || '';
+        const wsUrl   = mountEl?.dataset?.wsUrl   || window.SpaceElevatorConfig?.wsUrl   || '';
+        return { apiBase, wsUrl };
+      });
+
+      // Симулятор
+      useSimulator(!state.connected, state, setState);
+
+      // Подключение к WebSocket при наличии URL
+      useEffect(()=>{
+        if(!config.wsUrl) return; // не задан — остаёмся в симуляции
+        let ws;
+        try{
+          ws = new WebSocket(config.wsUrl);
+        }catch(e){
+          appendLog(setState, `WS ошибка: ${e.message}`);
+          return;
+        }
+        ws.onopen = ()=>{
+          setState(s=>({...s, connected:true, sim:false}));
+          appendLog(setState, `WS подключен: ${config.wsUrl}`);
+        };
+        ws.onmessage = ev=>{
+          try{
+            const msg = JSON.parse(ev.data);
+            if(msg.type === 'telemetry' && msg.data){
+              setState(s=>({...s, status:{...s.status, ...msg.data}}));
+            } else if(msg.type === 'parcels' && Array.isArray(msg.data)){
+              setState(s=>({...s, parcels: msg.data}));
+            }
+          }catch(err){ appendLog(setState, `WS parse error: ${err}`);}
+        };
+        ws.onclose = ()=>{
+          appendLog(setState, 'WS отключен. Переход в Simulation Mode.');
+          setState(s=>({...s, connected:false, sim:true}));
+        };
+        ws.onerror = ()=>{};
+        return ()=>{ try{ ws && ws.close(); }catch(_){} };
+      }, [config.wsUrl]);
+
+      // Отправка команд: либо в API, либо локально
+      const sendCommand = async (action, payload={})=>{
+        if(state.connected && config.apiBase){
+          try{
+            await postJSON(`${config.apiBase}/api/command`, { action, payload });
+            appendLog(setState, `Команда отправлена: ${action}`);
+          }catch(e){ appendLog(setState, `Ошибка команды: ${e.message}`); }
+        } else {
+          // Локальная симуляция
+          setState(s=>{
+            const st = {...s.status};
+            if(action===ACTIONS.START){ if(st.doors!=="OPEN"){ st.running = true; st.cabin = "MOVING"; } }
+            if(action===ACTIONS.STOP){ st.running = false; st.cabin = "IDLE"; }
+            if(action===ACTIONS.EMERGENCY_STOP){ st.running = false; st.cabin = "ERROR"; setTimeout(()=>setState(ss=>({...ss, status:{...ss.status, cabin:"IDLE"}})), 1500); }
+            if(action===ACTIONS.SET_DOORS){ const want = payload.state; if(Math.abs(st.speed_ms) < 0.1){ st.doors = want; } }
+            if(action===ACTIONS.SET_TARGET){ st.target_km = Math.max(0, Math.min(100, Number(payload.km||0))); }
+            if(action===ACTIONS.SET_SPEED){ /* обрабатывается на тике через setpoint */ }
+            return {...s, status:st};
+          });
+          if(action===ACTIONS.SET_SPEED){ setState(s=>({...s, setpoint_ms: Math.max(0, Math.min(200, Number(payload.ms||0)))})); }
+          appendLog(setState, `Локально: ${action}`);
+        }
+      };
+
+      // UI helpers
+      const st = state.status;
+
+      return (
+        <div className="section">
+          <div className="header">
+            <div className="title">Космолифт · Центр управления (MVP)</div>
+            <div style={{display:'flex', gap:8, alignItems:'center'}}>
+              {state.sim && <span className="badge warn">Simulation Mode</span>}
+              <span className={"badge "+(state.connected?"ok":"bad")}>{state.connected?"Подключено":"Оффлайн"}</span>
+            </div>
+          </div>
+
+          <div className="tabs">
+            <div className={"tab "+(state.tab==='control'?'active':'')} onClick={()=>setState(s=>({...s,tab:'control'}))}>Управление</div>
+            <div className={"tab "+(state.tab==='warehouse'?'active':'')} onClick={()=>setState(s=>({...s,tab:'warehouse'}))}>Склад</div>
+            <div className={"tab "+(state.tab==='settings'?'active':'')} onClick={()=>setState(s=>({...s,tab:'settings'}))}>Настройки</div>
+          </div>
+
+          {state.tab==='control' && (
+            <div className="row">
+              <div className="section card" style={{padding:16}}>
+                <div className="grid">
+                  <div className="kv"><div className="k">Положение</div><div className="v">{fmt.km(st.position_km)}</div></div>
+                  <div className="kv"><div className="k">Скорость</div><div className="v">{fmt.ms(st.speed_ms)}</div></div>
+                  <div className="kv"><div className="k">Вес</div><div className="v">{fmt.kg(st.payload_kg)}</div></div>
+                  <div className="kv"><div className="k">Двери</div><div className="v">{st.doors==='OPEN'? 'Открыты':'Закрыты'}</div></div>
+                  <div className="kv"><div className="k">Состояние</div><div className="v">{st.cabin}</div></div>
+                  <div className="kv"><div className="k">Цель</div><div className="v">{fmt.km(st.target_km)}</div></div>
+                </div>
+
+                <div className="controls" style={{marginTop:16}}>
+                  <div className="row2">
+                    <button className="btn primary" onClick={()=>sendCommand(ACTIONS.START)}>Старт</button>
+                    <button className="btn" onClick={()=>sendCommand(ACTIONS.STOP)}>Стоп</button>
+                  </div>
+                  <button className="btn danger" onClick={()=>sendCommand(ACTIONS.EMERGENCY_STOP)}>Аварийная остановка</button>
+
+                  <div className="row2">
+                    <div>
+                      <label>Целевая высота (км, 0–100)</label>
+                      <input type="range" min="0" max="100" step="0.5" value={st.target_km}
+                        onChange={e=>sendCommand(ACTIONS.SET_TARGET,{km:Number(e.target.value)})} />
+                    </div>
+                    <div>
+                      <label>Скорость, уставка (м/с, 0–200)</label>
+                      <input type="range" min="0" max="200" step="1" value={state.setpoint_ms}
+                        onChange={e=>sendCommand(ACTIONS.SET_SPEED,{ms:Number(e.target.value)})} />
+                      <div className="hint">Текущая уставка: {fmt.ms(state.setpoint_ms)}</div>
+                    </div>
+                  </div>
+
+                  <div className="row2">
+                    <button className="btn" onClick={()=>sendCommand(ACTIONS.SET_DOORS,{state: st.doors==='OPEN'?'CLOSED':'OPEN'})}>
+                      {st.doors==='OPEN'? 'Закрыть двери':'Открыть двери'}
+                    </button>
+                    <div>
+                      <label>Ручной вес (кг)</label>
+                      <input type="number" min="0" value={st.payload_kg}
+                        onChange={e=>setState(s=>({...s, status:{...s.status, payload_kg:Math.max(0,Number(e.target.value)||0)}}))} />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="footer">
+                  <div className="muted">Подсказка: открыть двери можно только при |v| &lt; 0.1 м/с</div>
+                </div>
+              </div>
+
+              <div className="section card" style={{padding:16}}>
+                <div style={{fontWeight:700, marginBottom:8}}>События</div>
+                <div className="log">
+                  {state.log.map((l,i)=> (
+                    <div key={i} className="log-item">[{l.t}] {l.msg}</div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {state.tab==='warehouse' && (
+            <Warehouse state={state} setState={setState} apiBase={config.apiBase} connected={state.connected} />
+          )}
+
+          {state.tab==='settings' && (
+            <Settings config={config} setConfig={setConfig} />
+          )}
+        </div>
+      );
+    }
+
+    function Settings({config, setConfig}){
+      const [apiBase, setApiBase] = useState(config.apiBase);
+      const [wsUrl, setWsUrl] = useState(config.wsUrl);
+      return (
+        <div className="section card" style={{padding:16}}>
+          <div className="grid" style={{gridTemplateColumns:'1fr'}}>
+            <div>
+              <label>API base URL</label>
+              <input value={apiBase} onChange={e=>setApiBase(e.target.value)} placeholder="http://localhost:8000" />
+            </div>
+            <div>
+              <label>WebSocket URL</label>
+              <input value={wsUrl} onChange={e=>setWsUrl(e.target.value)} placeholder="ws://localhost:8000/ws/telemetry" />
+            </div>
+            <div className="right">
+              <button className="btn" onClick={()=>setConfig({apiBase, wsUrl})}>Сохранить</button>
+            </div>
+          </div>
+          <div className="hint" style={{marginTop:8}}>Оставьте пустым, чтобы использовать локальную симуляцию без бэкенда.</div>
+        </div>
+      )
+    }
+
+    function Warehouse({state, setState, apiBase, connected}){
+      const [form, setForm] = useState({weight_kg:10,destination_km:50});
+
+      const addLocal = (p)=> setState(s=>({...s, parcels:[p, ...s.parcels].slice(0,100)}));
+
+      const addParcel = async()=>{
+        const p = { id: Math.random().toString(36).slice(2), weight_kg: Number(form.weight_kg)||0, destination_km: Number(form.destination_km)||0, status:'QUEUED' };
+        if(connected && apiBase){
+          try{ await postJSON(`${apiBase}/api/warehouse/parcel`, p); }
+          catch(e){ /* fallback локально */ addLocal(p); }
+        } else addLocal(p);
+      };
+
+      const loadFirst = ()=>{
+        setState(s=>{
+          const idx = s.parcels.findIndex(x=>x.status==='QUEUED');
+          if(idx>-1){
+            const ps = [...s.parcels];
+            ps[idx] = {...ps[idx], status:'LOADED'};
+            return {...s, parcels:ps, status:{...s.status, payload_kg: (s.status.payload_kg + ps[idx].weight_kg)}};
+          }
+          return s;
+        })
+      };
+
+      const shipLoaded = ()=>{
+        setState(s=>{
+          const ps = s.parcels.map(p=> p.status==='LOADED'? {...p, status:'SHIPPED'}:p);
+          return {...s, parcels:ps};
+        })
+      }
+
+      return (
+        <div className="row">
+          <div className="section card" style={{padding:16}}>
+            <div className="grid" style={{gridTemplateColumns:'repeat(3,1fr)'}}>
+              <div>
+                <label>Вес (кг)</label>
+                <input type="number" value={form.weight_kg} min="0" onChange={e=>setForm({...form, weight_kg:e.target.value})} />
+              </div>
+              <div>
+                <label>Цель (км)</label>
+                <input type="number" value={form.destination_km} min="0" onChange={e=>setForm({...form, destination_km:e.target.value})} />
+              </div>
+              <div className="right" style={{alignItems:'end'}}>
+                <button className="btn" onClick={addParcel}>Добавить посылку</button>
+              </div>
+            </div>
+            <div className="footer">
+              <button className="btn" onClick={loadFirst}>Загрузить первую</button>
+              <button className="btn" onClick={shipLoaded}>Отправить загруженные</button>
+            </div>
+
+            <div style={{marginTop:16}}>
+              <table>
+                <thead>
+                  <tr><th>ID</th><th>Вес</th><th>Цель</th><th>Статус</th></tr>
+                </thead>
+                <tbody>
+                  {state.parcels.map(p=> (
+                    <tr key={p.id}><td>{p.id.slice(0,6)}</td><td>{fmt.kg(p.weight_kg)}</td><td>{fmt.km(p.destination_km)}</td><td>{p.status}</td></tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="section card" style={{padding:16}}>
+            <div style={{fontWeight:700, marginBottom:8}}>Логи склада</div>
+            <div className="log">
+              {state.parcels.slice(0,10).map((p,i)=> (
+                <div key={i} className="log-item">[{now()}] Parcel {p.id.slice(0,6)} · {p.status} · {fmt.kg(p.weight_kg)} → {fmt.km(p.destination_km)}</div>
+              ))}
+            </div>
+            <div className="hint" style={{marginTop:8}}>Поддерживаются базовые операции: добавление, загрузка, отправка (локально или через API).</div>
+          </div>
+        </div>
+      )
+    }
+
+    // ======== Монтирование ========
+    const mountEl = document.getElementById('space-elevator-widget');
+    const root = ReactDOM.createRoot(mountEl);
+    root.render(<App mountEl={mountEl} />);
+  </script>
+</body>
+</html>
